@@ -30,6 +30,7 @@ import org.apache.texera.amber.operator.PythonOperatorDescriptor
 import org.apache.texera.amber.operator.metadata.annotations.AutofillAttributeName
 import org.apache.texera.amber.operator.metadata.{OperatorGroupConstants, OperatorInfo}
 import org.apache.texera.amber.pybuilder.PythonTemplateBuilder
+import javax.validation.constraints.NotNull
 
 class WindRoseChartOpDesc extends PythonOperatorDescriptor {
 
@@ -37,12 +38,14 @@ class WindRoseChartOpDesc extends PythonOperatorDescriptor {
   @JsonSchemaTitle("Radial Values (r)")
   @JsonPropertyDescription("Numeric values representing magnitude (e.g., frequency)")
   @AutofillAttributeName
+  @NotNull(message = "Radial Values (r) column must be selected.")
   var rColumn: EncodableString = _
 
   @JsonProperty(value = "thetaColumn", required = true)
   @JsonSchemaTitle("Angular Values (θ)")
   @JsonPropertyDescription("Direction or angle categories (e.g., N, NE, E)")
   @AutofillAttributeName
+  @NotNull(message = "Angular Values (θ) column must be selected.")
   var thetaColumn: EncodableString = _
 
   @JsonProperty(value = "colorColumn", required = false)
@@ -70,7 +73,7 @@ class WindRoseChartOpDesc extends PythonOperatorDescriptor {
 
   def createPlotlyFigure(): PythonTemplateBuilder = {
     val colorArg =
-      if (colorColumn != null)
+      if (colorColumn != null && colorColumn.nonEmpty)
         pyb"""
              |        color=$colorColumn,
              |"""
@@ -109,6 +112,11 @@ class WindRoseChartOpDesc extends PythonOperatorDescriptor {
          |    def process_table(self, table: Table, port: int) -> Iterator[Optional[TableLike]]:
          |        if table.empty:
          |            yield {'html-content': self.render_error("input table is empty.")}
+         |            return
+         |        if table[$rColumn].dtype.kind not in ["i", "u", "f"]:
+         |            yield {'html-content': self.render_error(
+         |                "Radial column must be numeric (int, float, or double)."
+         |            )}
          |            return
          |        ${createPlotlyFigure()}
          |        html = plotly.io.to_html(fig, include_plotlyjs='cdn', auto_play=False)
