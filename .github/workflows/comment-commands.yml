@@ -24,8 +24,10 @@
 #
 # On pull requests, the author can request or cancel reviewer requests
 # via `/request-review @user [@user ...]` and `/unrequest-review @user
-# [@user ...]`. We avoid the `/review` namespace so it stays free for
-# future use (e.g. self-review).
+# [@user ...]`. If `/request-review` is used without mentions, the job
+# falls back to git blame on changed files to auto-detect reviewers. We
+# avoid the `/review` namespace so it stays free for future use (e.g.
+# self-review).
 #
 # Sub-issue linking can be driven from either end of the relationship:
 # `/sub-issue #N [#M ...]` on a parent links those issues as children;
@@ -111,10 +113,16 @@ jobs:
           || startsWith(github.event.comment.body, '/unrequest-review'))
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // `git blame` needs to runlocally in the runner. Use
+            // Node's child_process helper to invoke the git CLI.
+            const { execFileSync } = require('node:child_process');
             const body = (context.payload.comment.body || '').trim();
             const pull_number = context.payload.issue.number;
             const commenter = context.payload.comment.user.login;
@@ -137,6 +145,97 @@ jobs:
               return;
             }
 
+            // Find a reviewer for the PR by running `git blame` on each
+            // changed file, picking the most recent commit author for
+            // that file, and turning that commit into a GitHub login.
+            // Returns an array of unique logins.
+            async function getReviewersFromBlame() {
+              const { data: pull } = await github.rest.pulls.get({
+                owner, repo, pull_number,
+              });
+
+              // List files changed in the pull request (paginated).
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner, repo, pull_number, per_page: 100,
+              });
+
+              // Parse the `git blame -p` output to find, for each file,
+              // the commit (SHA) that was the most recent author-time.
+              function latestBlameCommit(blameOutput) {
+                let latest = null; // { sha, authorTime }
+                let current = null;
+
+                function finalizeCurrent() {
+                  if (!current || current.authorTime == null) return;
+                  if (!latest || current.authorTime > latest.authorTime) {
+                    latest = current;
+                  }
+                }
+
+                for (const line of blameOutput.split(/\r?\n/)) {
+                  // A header line marks a new blamed commit block.
+                  const header = line.match(/^([0-9a-f^]+)\s+\d+\s+\d+\s+\d+$/);
+                  if (header) {
+                    finalizeCurrent();
+                    current = { sha: header[1].replace(/^\^/, ''), authorTime: null };
+                    continue;
+                  }
+
+                  // `author-time` lines give a UNIX timestamp we can use.
+                  const authorTime = line.match(/^author-time\s+(\d+)$/);
+                  if (authorTime && current) {
+                    current.authorTime = Number(authorTime[1]);
+                  }
+                }
+
+                finalizeCurrent();
+                return latest;
+              }
+
+              const reviewers = new Set();
+              for (const { filename } of files) {
+                let blameOutput;
+                try {
+                  // Run blame at the PR base commit so we attribute
+                  // existing lines correctly (not the PR tip).
+                  blameOutput = execFileSync('git', ['blame', '-p', pull.base.sha, '--', filename], { encoding: 'utf8' });
+                } catch (e) {
+                  core.warning(`git blame on ${filename} at ${pull.base.sha} failed: ${e.message}`);
+                  continue;
+                }
+
+                const latest = latestBlameCommit(blameOutput);
+                if (!latest) {
+                  core.warning(`Could not determine a blamed commit for ${filename}; skipping.`);
+                  continue;
+                }
+
+                let commit;
+                try {
+                  ({ data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: latest.sha }));
+                } catch (e) {
+                  core.warning(`Commit lookup for ${latest.sha} from ${filename} failed: ${e.message}`);
+                  continue;
+                }
+
+                // Prefer the GitHub-linked author/committer; skip if
+                // there is no linked login (e.g., authored by email only).
+                const login = commit.author?.login ?? commit.committer?.login;
+                if (!login) {
+                  core.warning(`Commit ${latest.sha} from ${filename} has no GitHub user; skipping.`);
+                  continue;
+                }
+
+                // Don't request the PR author or bot accounts.
+                if (login.toLowerCase() === author.toLowerCase()) continue;
+                if (commit.author?.type === 'Bot' || commit.committer?.type === 'Bot') continue;
+
+                reviewers.add(login);
+              }
+
+              return [...reviewers].sort();
+            }
+
             // Parse @user and @org/team mentions; route teams to the
             // team_reviewers bucket. Strip self so the API doesn't
             // reject the whole atomic call over one bad name. Copilot
@@ -153,8 +252,18 @@ jobs:
                 reviewers.push(h);
             }
             if (!reviewers.length && !team_reviewers.length) {
-              core.warning(`No valid @mentions in '${action}'; skipping.`);
-              return;
+              if (action !== 'request-review') {
+                core.warning(`No valid @mentions in '${action}'; skipping.`);
+                return;
+              }
+
+              reviewers.push(...await getReviewersFromBlame());
+              if (!reviewers.length) {
+                core.warning(
+                  `No valid @mentions in '${action}' and blame produced no reviewers; skipping.`,
+                );
+                return;
+              }
             }
 
             const params = { owner, repo, pull_number, reviewers, team_reviewers };
