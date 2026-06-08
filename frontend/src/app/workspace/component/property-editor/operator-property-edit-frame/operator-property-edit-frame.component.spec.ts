@@ -317,7 +317,10 @@ describe("OperatorPropertyEditFrameComponent", () => {
   });
 
   it("should return a fallback preview for HuggingFace operator with an unknown task", () => {
-    const hfPredicate = { ...cloneDeep(mockHuggingFacePredicate), operatorProperties: { task: "some-unknown-task", modelId: "" } };
+    const hfPredicate = {
+      ...cloneDeep(mockHuggingFacePredicate),
+      operatorProperties: { task: "some-unknown-task", modelId: "" },
+    };
     workflowActionService.addOperator(hfPredicate, mockPoint);
     component.ngOnChanges({
       currentOperatorId: new SimpleChange(undefined, hfPredicate.operatorID, true),
@@ -330,7 +333,10 @@ describe("OperatorPropertyEditFrameComponent", () => {
   });
 
   it("should return image kind preview for image-classification task", () => {
-    const hfPredicate = { ...cloneDeep(mockHuggingFacePredicate), operatorProperties: { task: "image-classification", modelId: "" } };
+    const hfPredicate = {
+      ...cloneDeep(mockHuggingFacePredicate),
+      operatorProperties: { task: "image-classification", modelId: "" },
+    };
     workflowActionService.addOperator(hfPredicate, mockPoint);
     component.ngOnChanges({
       currentOperatorId: new SimpleChange(undefined, hfPredicate.operatorID, true),
@@ -342,7 +348,10 @@ describe("OperatorPropertyEditFrameComponent", () => {
   });
 
   it("should return audio kind preview for text-to-speech task", () => {
-    const hfPredicate = { ...cloneDeep(mockHuggingFacePredicate), operatorProperties: { task: "text-to-speech", modelId: "" } };
+    const hfPredicate = {
+      ...cloneDeep(mockHuggingFacePredicate),
+      operatorProperties: { task: "text-to-speech", modelId: "" },
+    };
     workflowActionService.addOperator(hfPredicate, mockPoint);
     component.ngOnChanges({
       currentOperatorId: new SimpleChange(undefined, hfPredicate.operatorID, true),
@@ -354,7 +363,10 @@ describe("OperatorPropertyEditFrameComponent", () => {
   });
 
   it("should return video kind preview for text-to-video task", () => {
-    const hfPredicate = { ...cloneDeep(mockHuggingFacePredicate), operatorProperties: { task: "text-to-video", modelId: "" } };
+    const hfPredicate = {
+      ...cloneDeep(mockHuggingFacePredicate),
+      operatorProperties: { task: "text-to-video", modelId: "" },
+    };
     workflowActionService.addOperator(hfPredicate, mockPoint);
     component.ngOnChanges({
       currentOperatorId: new SimpleChange(undefined, hfPredicate.operatorID, true),
