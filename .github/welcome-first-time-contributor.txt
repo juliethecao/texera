@@ -9,3 +9,5 @@ You can drive common housekeeping yourself by commenting one of these commands o
 - **Pull requests (author only).** Comment `/request-review @user` to request a review from someone, or `/unrequest-review @user` to withdraw that request.
 
 Each command must match exactly: `/take this` will not work, only `/take` does. For the full contribution flow, see [CONTRIBUTING.md](https://github.com/{{owner}}/{{repo}}/blob/main/CONTRIBUTING.md).
+
+When opening a pull request, the CI will automatically suggest reviewers based on git blame of the changed files.
