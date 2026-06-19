@@ -57,3 +57,4 @@ class WorkflowScheduler(
   def hasPendingRegions: Boolean = schedule != null && schedule.hasNext
 
 }
+

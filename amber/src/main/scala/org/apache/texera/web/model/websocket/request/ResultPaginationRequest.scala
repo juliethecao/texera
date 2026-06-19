@@ -28,3 +28,4 @@ case class ResultPaginationRequest(
     columnLimit: Int = Int.MaxValue,
     columnSearch: Option[String] = None
 ) extends TexeraWebSocketRequest
+

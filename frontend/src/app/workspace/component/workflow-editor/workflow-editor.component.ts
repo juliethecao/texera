@@ -1,4 +1,3 @@
-// test: trigger suggest-reviewers CI (many-contributors case)
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
