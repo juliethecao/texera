@@ -48,9 +48,11 @@ SET search_path TO texera_db, public;
 -- ============================================
 DROP TABLE IF EXISTS operator_executions CASCADE;
 DROP TABLE IF EXISTS operator_port_executions CASCADE;
+DROP TABLE IF EXISTS operator_port_cache CASCADE;
 DROP TABLE IF EXISTS workflow_user_access CASCADE;
 DROP TABLE IF EXISTS workflow_of_user CASCADE;
 DROP TABLE IF EXISTS user_config CASCADE;
+DROP TABLE IF EXISTS auth_provider CASCADE;
 DROP TABLE IF EXISTS "user" CASCADE;
 DROP TABLE IF EXISTS user_last_active_time CASCADE;
 DROP TABLE IF EXISTS workflow CASCADE;
@@ -60,10 +62,13 @@ DROP TABLE IF EXISTS workflow_of_project CASCADE;
 DROP TABLE IF EXISTS workflow_executions CASCADE;
 DROP TABLE IF EXISTS dataset_upload_session CASCADE;
 DROP TABLE IF EXISTS dataset_upload_session_part CASCADE;
-
 DROP TABLE IF EXISTS dataset CASCADE;
 DROP TABLE IF EXISTS dataset_user_access CASCADE;
 DROP TABLE IF EXISTS dataset_version CASCADE;
+DROP TABLE IF EXISTS model_user_access CASCADE;
+DROP TABLE IF EXISTS model_version CASCADE;
+DROP TABLE IF EXISTS model CASCADE;
+DROP TABLE IF EXISTS dataset_contributor CASCADE;
 DROP TABLE IF EXISTS public_project CASCADE;
 DROP TABLE IF EXISTS project_user_access CASCADE;
 DROP TABLE IF EXISTS workflow_user_likes CASCADE;
@@ -85,11 +90,14 @@ DROP TABLE IF EXISTS virtual_environments CASCADE;
 DROP TYPE IF EXISTS user_role_enum CASCADE;
 DROP TYPE IF EXISTS privilege_enum CASCADE;
 DROP TYPE IF EXISTS action_enum CASCADE;
+DROP TYPE IF EXISTS provider_type_enum CASCADE;
 
 CREATE TYPE user_role_enum AS ENUM ('INACTIVE', 'RESTRICTED', 'REGULAR', 'ADMIN');
 CREATE TYPE action_enum AS ENUM ('like', 'unlike', 'view', 'clone');
 CREATE TYPE privilege_enum AS ENUM ('NONE', 'READ', 'WRITE');
 CREATE TYPE workflow_computing_unit_type_enum AS ENUM ('local', 'kubernetes');
+CREATE TYPE provider_type_enum AS ENUM ('LOCAL', 'GOOGLE');
+CREATE TYPE user_warehouse_flavor_enum AS ENUM ('local', 'aws');
 
 -- ============================================
 -- 5. Create tables
@@ -101,17 +109,31 @@ CREATE TABLE IF NOT EXISTS "user"
     uid                     SERIAL PRIMARY KEY,
     name                    VARCHAR(256) NOT NULL,
     email                   VARCHAR(256) UNIQUE,
-    password                VARCHAR(256),
-    google_id               VARCHAR(256) UNIQUE,
-    google_avatar           VARCHAR(100),
+    avatar                  VARCHAR(512),
     role                    user_role_enum NOT NULL DEFAULT 'INACTIVE',
     comment                 TEXT,
     account_creation_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
     affiliation             VARCHAR(128),
     joining_reason          VARCHAR(500),
-    -- check that either password or google_id is not null
-    CONSTRAINT ck_nulltest CHECK ((password IS NOT NULL) OR (google_id IS NOT NULL))
+    -- placeholder accounts are auto-created for dataset contributors and carry no credentials until claimed
+    is_placeholder          BOOLEAN NOT NULL DEFAULT FALSE
     );
+
+CREATE TABLE IF NOT EXISTS auth_provider
+(
+    uid               INT                 NOT NULL,
+    provider_type     provider_type_enum  NOT NULL,
+    provider_id       VARCHAR(256)        NOT NULL,
+    password          VARCHAR(256), -- hashed credential; only for LOCAL
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (uid, provider_type),
+    FOREIGN KEY (uid) REFERENCES "user"(uid) ON DELETE CASCADE,
+    CONSTRAINT uq_provider_identity UNIQUE (provider_type, provider_id),
+    CONSTRAINT ck_provider_credential CHECK ((provider_type = 'LOCAL') = (password IS NOT NULL))
+    );
+
+-- Contributor emails are resolved with lower(email) lookups.
+CREATE INDEX idx_user_email_lower ON "user" (lower(email));
 
 -- user_config
 CREATE TABLE IF NOT EXISTS user_config
@@ -120,6 +142,16 @@ CREATE TABLE IF NOT EXISTS user_config
     key   VARCHAR(256) NOT NULL,
     value TEXT NOT NULL,
     PRIMARY KEY (uid, key),
+    FOREIGN KEY (uid) REFERENCES "user"(uid) ON DELETE CASCADE
+    );
+
+-- feedback
+CREATE TABLE IF NOT EXISTS feedback
+(
+    fid           SERIAL PRIMARY KEY,
+    uid           INT NOT NULL,
+    message       TEXT NOT NULL,
+    creation_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (uid) REFERENCES "user"(uid) ON DELETE CASCADE
     );
 
@@ -163,6 +195,14 @@ CREATE TABLE IF NOT EXISTS workflow_version
     wid            INT NOT NULL,
     content        TEXT NOT NULL,
     creation_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (wid) REFERENCES workflow(wid) ON DELETE CASCADE
+    );
+
+-- workflow_cover_image (optional custom card cover image, stored as a downscaled data URL)
+CREATE TABLE IF NOT EXISTS workflow_cover_image
+(
+    wid   INT PRIMARY KEY,
+    image TEXT NOT NULL,
     FOREIGN KEY (wid) REFERENCES workflow(wid) ON DELETE CASCADE
     );
 
@@ -214,6 +254,24 @@ CREATE TABLE IF NOT EXISTS workflow_computing_unit
     FOREIGN KEY (uid) REFERENCES "user"(uid) ON DELETE CASCADE
 );
 
+-- Per-user warehouse registrations (#6870): one row per warehouse a user registered.
+-- Base columns only; the assume-role (BYO-S3) columns come in a later change.
+CREATE TABLE IF NOT EXISTS user_warehouse
+(
+    whid                      SERIAL PRIMARY KEY,
+    uid                       INT          NOT NULL,
+    name                      VARCHAR(128) NOT NULL,
+    lakekeeper_warehouse_name VARCHAR(255) NOT NULL UNIQUE,
+    lakekeeper_warehouse_id   UUID         NOT NULL,
+    flavor                    user_warehouse_flavor_enum NOT NULL,
+    s3_bucket                 VARCHAR(255),
+    s3_endpoint               VARCHAR(255),
+    s3_region                 VARCHAR(64),
+    created_at                TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    UNIQUE (uid, name),
+    FOREIGN KEY (uid) REFERENCES "user" (uid) ON DELETE CASCADE
+);
+
 -- virtual_environments table
 CREATE TABLE IF NOT EXISTS virtual_environments
 (
@@ -241,10 +299,12 @@ CREATE TABLE IF NOT EXISTS workflow_executions
     environment_version VARCHAR(128) NOT NULL,
     log_location        TEXT,
     runtime_stats_uri   TEXT,
-    runtime_stats_size  INT DEFAULT 0,
+    runtime_stats_size  BIGINT DEFAULT 0,
+    whid                INT,
     FOREIGN KEY (vid) REFERENCES workflow_version(vid) ON DELETE CASCADE,
     FOREIGN KEY (uid) REFERENCES "user"(uid) ON DELETE CASCADE,
-    FOREIGN KEY (cuid) REFERENCES workflow_computing_unit(cuid) ON DELETE CASCADE
+    FOREIGN KEY (cuid) REFERENCES workflow_computing_unit(cuid) ON DELETE CASCADE,
+    FOREIGN KEY (whid) REFERENCES user_warehouse(whid) ON DELETE SET NULL
 );
 
 -- public_project
@@ -268,7 +328,8 @@ CREATE TABLE IF NOT EXISTS dataset
     description    TEXT NOT NULL,
     creation_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     cover_image    varchar(255),
-    FOREIGN KEY (owner_uid) REFERENCES "user"(uid) ON DELETE CASCADE
+    FOREIGN KEY (owner_uid) REFERENCES "user"(uid) ON DELETE CASCADE,
+    UNIQUE (owner_uid, name)
     );
 
 -- dataset_user_access
@@ -293,6 +354,26 @@ CREATE TABLE IF NOT EXISTS dataset_version
     creation_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (did) REFERENCES dataset(did) ON DELETE CASCADE
     );
+
+-- dataset_contributor
+CREATE TABLE IF NOT EXISTS dataset_contributor
+(
+    cid           SERIAL PRIMARY KEY,
+    did           INT NOT NULL,
+    name          VARCHAR(256) NOT NULL,
+    creator       BOOLEAN NOT NULL DEFAULT FALSE,
+    email         VARCHAR(256),
+    affiliation   VARCHAR(256),
+    comments      TEXT,
+    uid           INT,
+    FOREIGN KEY (did) REFERENCES dataset(did) ON DELETE CASCADE,
+    FOREIGN KEY (uid) REFERENCES "user"(uid) ON DELETE SET NULL
+    );
+
+-- Per-dataset contributor emails are unique (blank emails exempt).
+CREATE UNIQUE INDEX idx_dataset_contributor_did_email
+    ON dataset_contributor (did, lower(trim(email)))
+    WHERE email IS NOT NULL AND trim(email) <> '';
 
 CREATE TABLE IF NOT EXISTS dataset_upload_session
 (
@@ -339,13 +420,54 @@ CREATE TABLE IF NOT EXISTS dataset_upload_session_part
         ON DELETE CASCADE
 );
 
+-- ML models
+CREATE TABLE IF NOT EXISTS model
+(
+    mid             SERIAL PRIMARY KEY,
+    owner_uid       INT NOT NULL,
+    name            VARCHAR(128) NOT NULL,
+    repository_name VARCHAR(128),
+    is_public       BOOLEAN NOT NULL DEFAULT TRUE,
+    is_downloadable BOOLEAN NOT NULL DEFAULT TRUE,
+    description     TEXT NOT NULL,
+    creation_time   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cover_image     varchar(255),
+    framework       VARCHAR(32),
+    format          VARCHAR(32),
+    FOREIGN KEY (owner_uid) REFERENCES "user"(uid) ON DELETE CASCADE,
+    UNIQUE (owner_uid, name)
+    );
+
+-- model_version
+CREATE TABLE IF NOT EXISTS model_version
+(
+    mvid          SERIAL PRIMARY KEY,
+    mid           INT NOT NULL,
+    creator_uid   INT NOT NULL,
+    name          VARCHAR(128) NOT NULL,
+    version_hash  VARCHAR(64) NOT NULL,
+    creation_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (mid) REFERENCES model(mid) ON DELETE CASCADE
+    );
+
+-- model_user_access
+CREATE TABLE IF NOT EXISTS model_user_access
+(
+    mid       INT NOT NULL,
+    uid       INT NOT NULL,
+    privilege privilege_enum NOT NULL DEFAULT 'NONE',
+    PRIMARY KEY (mid, uid),
+    FOREIGN KEY (mid) REFERENCES model(mid) ON DELETE CASCADE,
+    FOREIGN KEY (uid) REFERENCES "user"(uid) ON DELETE CASCADE
+    );
+
 -- operator_executions (modified to match MySQL: no separate primary key; added console_messages_uri)
 CREATE TABLE IF NOT EXISTS operator_executions
 (
     workflow_execution_id INT NOT NULL,
     operator_id           VARCHAR(100) NOT NULL,
     console_messages_uri  TEXT,
-    console_messages_size INT DEFAULT 0,
+    console_messages_size BIGINT DEFAULT 0,
     PRIMARY KEY (workflow_execution_id, operator_id),
     FOREIGN KEY (workflow_execution_id) REFERENCES workflow_executions(eid) ON DELETE CASCADE
     );
@@ -356,9 +478,35 @@ CREATE TABLE operator_port_executions
     workflow_execution_id INT NOT NULL,
     global_port_id        VARCHAR(200) NOT NULL,
     result_uri            TEXT,
-    result_size           INT DEFAULT 0,
+    result_size           BIGINT DEFAULT 0,
     PRIMARY KEY (workflow_execution_id, global_port_id),
     FOREIGN KEY (workflow_execution_id) REFERENCES workflow_executions(eid) ON DELETE CASCADE
+);
+
+-- operator_port_cache
+-- Caches a materialized output port result so it can be reused across executions.
+-- A row is identified by (workflow_id, global_port_id, cache_key_hash), where
+-- cache_key_hash is a SHA-256 hash of the upstream sub-DAG that produces the port (its
+-- operators, their parameters and exec info, schemas, and wiring). cache_key_hash is the
+-- lookup key; cache_key_json is the JSON the hash was computed from, kept so a hash match
+-- can be confirmed against the full content (collision safety). A different upstream
+-- computation (for example an operator parameter or version change) produces a different
+-- cache_key_hash and therefore a new row, so existing entries are never overwritten: each
+-- row is the result of one specific computation of one port. tuple_count is the result's
+-- row count, kept so the coordinator can report a reused region's output stats without a
+-- second query to the Iceberg catalog.
+CREATE TABLE operator_port_cache
+(
+    workflow_id         INT NOT NULL,
+    global_port_id      VARCHAR(200) NOT NULL,
+    cache_key_hash      CHAR(64) NOT NULL,
+    cache_key_json      TEXT NOT NULL,
+    storage_uri         TEXT NOT NULL,
+    tuple_count         BIGINT,
+    source_execution_id BIGINT,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (workflow_id, global_port_id, cache_key_hash),
+    FOREIGN KEY (workflow_id) REFERENCES workflow(wid) ON DELETE CASCADE
 );
 
 -- workflow_user_likes

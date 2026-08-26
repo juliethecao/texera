@@ -20,7 +20,7 @@
 import { DatePipe, registerLocaleData } from "@angular/common";
 import { HTTP_INTERCEPTORS, HttpClientModule } from "@angular/common/http";
 import en from "@angular/common/locales/en";
-import { APP_INITIALIZER, CUSTOM_ELEMENTS_SCHEMA, NgModule } from "@angular/core";
+import { APP_INITIALIZER, CUSTOM_ELEMENTS_SCHEMA, APP_BOOTSTRAP_LISTENER, ErrorHandler, NgModule } from "@angular/core";
 import { FormsModule, ReactiveFormsModule } from "@angular/forms";
 import { BrowserModule } from "@angular/platform-browser";
 import { BrowserAnimationsModule } from "@angular/platform-browser/animations";
@@ -53,6 +53,7 @@ import { NullTypeComponent } from "./common/formly/null.type";
 import { ObjectTypeComponent } from "./common/formly/object.type";
 import { UserService } from "./common/service/user/user.service";
 import { GuiConfigService } from "./common/service/gui-config.service";
+import { GlobalErrorHandler } from "./common/service/global-error-handler/global-error-handler.service";
 import { DashboardComponent } from "./dashboard/component/dashboard.component";
 import { UserWorkflowComponent } from "./dashboard/component/user/user-workflow/user-workflow.component";
 import { ShareAccessComponent } from "./dashboard/component/user/share-access/share-access.component";
@@ -105,6 +106,9 @@ import { CoeditorUserIconComponent } from "./workspace/component/menu/coeditor-u
 import { AgentPanelComponent } from "./workspace/component/agent/agent-panel/agent-panel.component";
 import { AgentChatComponent } from "./workspace/component/agent/agent-panel/agent-chat/agent-chat.component";
 import { AgentRegistrationComponent } from "./workspace/component/agent/agent-panel/agent-registration/agent-registration.component";
+import { HuggingFaceImageUploadComponent } from "./workspace/component/hugging-face-image-upload/hugging-face-image-upload.component";
+import { HuggingFaceComponent } from "./workspace/component/hugging-face/hugging-face.component";
+import { HuggingFaceAudioUploadComponent } from "./workspace/component/hugging-face-audio-upload/hugging-face-audio-upload.component";
 import { DatasetFileSelectorComponent } from "./workspace/component/dataset-file-selector/dataset-file-selector.component";
 import { DatasetVersionSelectorComponent } from "./workspace/component/dataset-version-selector/dataset-version-selector.component";
 import { DatasetSelectionModalComponent } from "./workspace/component/dataset-selection-modal/dataset-selection-modal.component";
@@ -113,9 +117,9 @@ import { CollabWrapperComponent } from "./common/formly/collab-wrapper/collab-wr
 import { NzSwitchModule } from "ng-zorro-antd/switch";
 import { NzRadioModule } from "ng-zorro-antd/radio";
 import { AboutComponent } from "./hub/component/about/about.component";
+import { TexeraLoginComponent } from "./hub/component/login/texera-login.component";
 import { NzLayoutModule } from "ng-zorro-antd/layout";
 import { AuthGuardService } from "./common/service/user/auth-guard.service";
-import { LocalLoginComponent } from "./hub/component/about/local-login/local-login.component";
 import { MarkdownModule } from "ngx-markdown";
 import { FileSaverService } from "./dashboard/service/user/file/file-saver.service";
 import { DragDropModule } from "@angular/cdk/drag-drop";
@@ -151,7 +155,6 @@ import { DatasetDetailComponent } from "./dashboard/component/user/user-dataset/
 import { UserDatasetVersionFiletreeComponent } from "./dashboard/component/user/user-dataset/user-dataset-explorer/user-dataset-version-filetree/user-dataset-version-filetree.component";
 import { UserDatasetFileRendererComponent } from "./dashboard/component/user/user-dataset/user-dataset-explorer/user-dataset-file-renderer/user-dataset-file-renderer.component";
 import { NzSpinModule } from "ng-zorro-antd/spin";
-import { UserDatasetListItemComponent } from "./dashboard/component/user/user-dataset/user-dataset-list-item/user-dataset-list-item.component";
 import { NgxFileDropModule } from "ngx-file-drop";
 import { NzTreeModule } from "ng-zorro-antd/tree";
 import { NzTreeViewModule } from "ng-zorro-antd/tree-view";
@@ -186,7 +189,6 @@ import { NzProgressModule } from "ng-zorro-antd/progress";
 import { ComputingUnitSelectionComponent } from "./workspace/component/power-button/computing-unit-selection.component";
 import { NzSliderModule } from "ng-zorro-antd/slider";
 import { AdminSettingsComponent } from "./dashboard/component/admin/settings/admin-settings.component";
-import { FormlyRepeatDndComponent } from "./common/formly/repeat-dnd/repeat-dnd.component";
 import { NzInputNumberModule } from "ng-zorro-antd/input-number";
 import { NzGridModule } from "ng-zorro-antd/grid";
 import { NzCheckboxModule } from "ng-zorro-antd/checkbox";
@@ -194,6 +196,7 @@ import { RegistrationRequestModalComponent } from "./common/service/user/registr
 import { UserComputingUnitComponent } from "./dashboard/component/user/user-computing-unit/user-computing-unit.component";
 import { UserComputingUnitListItemComponent } from "./dashboard/component/user/user-computing-unit/user-computing-unit-list-item/user-computing-unit-list-item.component";
 import { UserVenvComponent } from "./dashboard/component/user/user-venv/user-venv.component";
+import { JupyterPanelService } from "./workspace/service/jupyter-panel/jupyter-panel.service";
 
 registerLocaleData(en);
 
@@ -208,7 +211,7 @@ registerLocaleData(en);
         tokenGetter: AuthService.getAccessToken,
         skipWhenExpired: true,
         throwNoTokenError: false,
-        disallowedRoutes: ["forum/api/users", "api/config/pre-login"],
+        disallowedRoutes: ["forum/api/users", "api/config/pre-login", "api/config/settings/public"],
       },
     }),
     BrowserAnimationsModule,
@@ -268,7 +271,6 @@ registerLocaleData(en);
     NzCheckboxModule,
     NzGridModule,
     ScrollingModule,
-    FormlyRepeatDndComponent,
     UiUdfParametersComponent,
     AdminGmailComponent,
     PublicProjectComponent,
@@ -288,7 +290,6 @@ registerLocaleData(en);
     AdminExecutionComponent,
     UserIconComponent,
     UserAvatarComponent,
-    LocalLoginComponent,
     UserWorkflowComponent,
     UserQuotaComponent,
     RowModalComponent,
@@ -320,7 +321,6 @@ registerLocaleData(en);
     UserDatasetVersionCreatorComponent,
     DatasetDetailComponent,
     UserDatasetVersionFiletreeComponent,
-    UserDatasetListItemComponent,
     UserDatasetFileRendererComponent,
     UserDatasetStagedObjectsListComponent,
     NzModalCommentBoxComponent,
@@ -331,12 +331,16 @@ registerLocaleData(en);
     AgentChatComponent,
     AgentRegistrationComponent,
     AgentInteractionComponent,
+    HuggingFaceComponent,
+    HuggingFaceAudioUploadComponent,
+    HuggingFaceImageUploadComponent,
     DatasetFileSelectorComponent,
     DatasetVersionSelectorComponent,
     DatasetSelectionModalComponent,
     ReActStepDetailModalComponent,
     CollabWrapperComponent,
     AboutComponent,
+    TexeraLoginComponent,
     UserWorkflowListItemComponent,
     UserProjectListItemComponent,
     SortButtonComponent,
@@ -367,6 +371,7 @@ registerLocaleData(en);
     UserVenvComponent,
   ],
   providers: [
+    { provide: ErrorHandler, useClass: GlobalErrorHandler },
     provideNzI18n(en_US),
     AuthGuardService,
     AdminGuardService,
@@ -412,6 +417,12 @@ registerLocaleData(en);
           )
         ),
       deps: [GuiConfigService],
+      multi: true,
+    },
+    {
+      provide: APP_BOOTSTRAP_LISTENER,
+      useFactory: (jupyterPanelService: JupyterPanelService) => () => jupyterPanelService.init(),
+      deps: [JupyterPanelService],
       multi: true,
     },
   ],

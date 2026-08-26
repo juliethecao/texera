@@ -43,6 +43,7 @@ import org.apache.texera.amber.operator.dummy.DummyOpDesc
 import org.apache.texera.amber.operator.filter.SpecializedFilterOpDesc
 import org.apache.texera.amber.operator.hashJoin.HashJoinOpDesc
 import org.apache.texera.amber.operator.huggingFace.{
+  HuggingFaceInferenceOpDesc,
   HuggingFaceIrisLogisticRegressionOpDesc,
   HuggingFaceSentimentAnalysisOpDesc,
   HuggingFaceSpamSMSDetectionOpDesc,
@@ -144,6 +145,7 @@ import org.apache.texera.amber.operator.visualization.waterfallChart.WaterfallCh
 import org.apache.texera.amber.operator.visualization.windRoseChart.WindRoseChartOpDesc
 import org.apache.texera.amber.operator.visualization.wordCloud.WordCloudOpDesc
 import org.apache.commons.lang3.builder.{EqualsBuilder, HashCodeBuilder, ToStringBuilder}
+import org.apache.texera.amber.operator.loop.{LoopEndOpDesc, LoopStartOpDesc}
 import org.apache.texera.amber.operator.sklearn.testing.SklearnTestingOpDesc
 import org.apache.texera.amber.operator.source.scan.file.{FileScanOpDesc, FileScanSourceOpDesc}
 import org.apache.texera.amber.operator.visualization.stripChart.StripChartOpDesc
@@ -220,6 +222,8 @@ trait StateTransferFunc
     new Type(value = classOf[TypeCastingOpDesc], name = "TypeCasting"),
     new Type(value = classOf[LimitOpDesc], name = "Limit"),
     new Type(value = classOf[SleepOpDesc], name = "Sleep"),
+    new Type(value = classOf[LoopStartOpDesc], name = "LoopStart"),
+    new Type(value = classOf[LoopEndOpDesc], name = "LoopEnd"),
     new Type(value = classOf[RandomKSamplingOpDesc], name = "RandomKSampling"),
     new Type(value = classOf[ReservoirSamplingOpDesc], name = "ReservoirSampling"),
     new Type(value = classOf[HashJoinOpDesc[String]], name = "HashJoin"),
@@ -351,11 +355,6 @@ trait StateTransferFunc
       value = classOf[SklearnTrainingLogisticRegressionCVOpDesc],
       name = "SklearnTrainingLogisticRegressionCV"
     ),
-    new Type(value = classOf[SklearnLogisticRegressionOpDesc], name = "SklearnLogisticRegression"),
-    new Type(
-      value = classOf[SklearnLogisticRegressionCVOpDesc],
-      name = "SklearnLogisticRegressionCV"
-    ),
     new Type(value = classOf[SklearnRidgeOpDesc], name = "SklearnRidge"),
     new Type(value = classOf[SklearnRidgeCVOpDesc], name = "SklearnRidgeCV"),
     new Type(value = classOf[SklearnSDGOpDesc], name = "SklearnSDG"),
@@ -396,6 +395,7 @@ trait StateTransferFunc
     ),
     new Type(value = classOf[SklearnDummyClassifierOpDesc], name = "SklearnDummyClassifier"),
     new Type(value = classOf[SklearnPredictionOpDesc], name = "SklearnPrediction"),
+    new Type(value = classOf[HuggingFaceInferenceOpDesc], name = "HuggingFace"),
     new Type(
       value = classOf[HuggingFaceSentimentAnalysisOpDesc],
       name = "HuggingFaceSentimentAnalysis"

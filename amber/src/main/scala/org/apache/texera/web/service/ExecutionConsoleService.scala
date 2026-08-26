@@ -22,14 +22,14 @@ package org.apache.texera.web.service
 import com.google.protobuf.timestamp.Timestamp
 import com.twitter.util.{Await, Duration}
 import com.typesafe.scalalogging.LazyLogging
-import org.apache.texera.amber.config.ApplicationConfig
+import org.apache.texera.common.config.ApplicationConfig
 import org.apache.texera.amber.core.storage.model.BufferedItemWriter
 import org.apache.texera.amber.core.storage.result.ResultSchema
 import org.apache.texera.amber.core.storage.{DocumentFactory, VFSURIFactory}
 import org.apache.texera.amber.core.tuple.Tuple
 import org.apache.texera.amber.core.virtualidentity.{ActorVirtualIdentity, OperatorIdentity}
 import org.apache.texera.amber.core.workflow.WorkflowContext
-import org.apache.texera.amber.engine.architecture.controller.ExecutionStateUpdate
+import org.apache.texera.amber.engine.architecture.coordinator.ExecutionStateUpdate
 import org.apache.texera.amber.engine.architecture.rpc.controlcommands.ConsoleMessageType.COMMAND
 import org.apache.texera.amber.engine.architecture.rpc.controlcommands.{
   ConsoleMessage,
@@ -144,7 +144,12 @@ class ExecutionConsoleService(
     consoleMessageOpIdToWriterMap.getOrElseUpdate(
       opId.id, {
         val uri = VFSURIFactory
-          .createConsoleMessagesURI(workflowContext.workflowId, workflowContext.executionId, opId)
+          .createConsoleMessagesURI(
+            workflowContext.workflowId,
+            workflowContext.executionId,
+            opId,
+            warehouse = workflowContext.warehouse
+          )
         val writer = DocumentFactory
           .createDocument(uri, ResultSchema.consoleMessagesSchema)
           .writer("console_messages")
@@ -286,7 +291,7 @@ class ExecutionConsoleService(
   //Receive evaluate python expression
   addSubscription(wsInput.subscribe((req: PythonExpressionEvaluateRequest, uidOpt) => {
     val result = Await.result(
-      client.controllerInterface.evaluatePythonExpression(
+      client.coordinatorInterface.evaluatePythonExpression(
         EvaluatePythonExpressionRequest(req.expression, req.operatorId),
         ()
       ),
@@ -325,7 +330,7 @@ class ExecutionConsoleService(
       addConsoleMessage(consoleStore, req.operatorId, newMessage)
     }
 
-    client.controllerInterface.debugCommand(AmberDebugCommandRequest(req.workerId, req.cmd), ())
+    client.coordinatorInterface.debugCommand(AmberDebugCommandRequest(req.workerId, req.cmd), ())
 
   }))
 

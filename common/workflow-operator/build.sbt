@@ -35,6 +35,19 @@ ThisBuild / conflictManager := ConflictManager.latestRevision
 // Restrict parallel execution of tests to avoid conflicts
 Global / concurrentRestrictions += Tags.limit(Tags.Test, 1)
 
+// A test needing more than a bare Python interpreter is tagged, so the amber job
+// excludes it, and amber-integration, which installs amber's requirements files,
+// runs it. The amber job already sets this env var on the step that invokes
+// WorkflowOperator/jacoco, so no workflow change is needed for the exclusion.
+//
+// PythonCodeRawInvalidTextSpec reads the same env var and value directly, to tell
+// a missing package in amber-integration (a defect) from one on a developer's
+// machine (a local-setup fact). Changing the variable or the value here without
+// changing it there leaves that test cancelling in the job meant to fail it.
+Test / testOptions ++= TestFilters.integrationSplit(
+  envVar = "AMBER_TEST_FILTER",
+  tag = "org.apache.texera.amber.operator.tags.IntegrationTest"
+)
 
 /////////////////////////////////////////////////////////////////////////////
 // Compiler Options
@@ -64,7 +77,7 @@ libraryDependencies ++= Seq(
 // Jackson-related Dependencies
 /////////////////////////////////////////////////////////////////////////////
 
-val jacksonVersion = "2.18.6"
+val jacksonVersion = "2.18.8"
 libraryDependencies ++= Seq(
   "com.fasterxml.jackson.core" % "jackson-databind" % jacksonVersion,                  // Jackson Databind
   "com.fasterxml.jackson.core" % "jackson-annotations" % jacksonVersion,               // Jackson Annotation
@@ -96,6 +109,15 @@ libraryDependencies ++= Seq(
   "com.fasterxml.jackson.module" %% "jackson-module-scala" % jacksonVersion,
   // https://mvnrepository.com/artifact/com.fasterxml.jackson.module/jackson-module-no-ctor-deser
   "com.fasterxml.jackson.module" % "jackson-module-no-ctor-deser" % jacksonVersion,
+)
+
+// Arrow 19's transitive deps pull jackson-databind past the 2.18 line that
+// jackson-module-scala is pinned to; force the Jackson core family back to
+// jacksonVersion so the Scala module can initialize.
+dependencyOverrides ++= Seq(
+  "com.fasterxml.jackson.core" % "jackson-core" % jacksonVersion,
+  "com.fasterxml.jackson.core" % "jackson-databind" % jacksonVersion,
+  "com.fasterxml.jackson.core" % "jackson-annotations" % jacksonVersion
 )
 
 /////////////////////////////////////////////////////////////////////////////

@@ -25,6 +25,7 @@ import { Role, User } from "../../type/user";
 import { AuthService } from "./auth.service";
 import { GuiConfigService } from "../gui-config.service";
 import { catchError, map, shareReplay, switchMap } from "rxjs/operators";
+import { validateEmailFormat } from "../../util/email";
 
 /**
  * User Service manages User information. It relies on different
@@ -46,6 +47,8 @@ export class UserService {
   ) {
     const user = this.authService.loginWithExistingToken();
     this.changeUser(user);
+
+    this.authService.sessionChanged().subscribe(() => this.changeUser(this.authService.loginWithExistingToken()));
   }
   public getCurrentUser(): User | undefined {
     return this.currentUser;
@@ -81,9 +84,9 @@ export class UserService {
     this.changeUser(undefined);
   }
 
-  public register(username: string, password: string): Observable<void> {
+  public register(username: string, email: string, password: string): Observable<void> {
     return this.authService
-      .register(username, password)
+      .register(username, email, password)
       .pipe(switchMap(({ accessToken }) => this.handleAccessToken(accessToken)));
   }
 
@@ -134,24 +137,40 @@ export class UserService {
     return { result: true, message: "Username frontend validation success." };
   }
 
-  getAvatar(googleAvatar: string): Observable<string | undefined> {
-    if (!googleAvatar) return of(undefined);
+  /**
+   * check the given parameter is a syntactically valid email address for registration
+   * @param email
+   */
+  static validateEmail(email: string): { result: boolean; message: string } {
+    return validateEmailFormat(email);
+  }
 
-    const cached = this.cache.get(googleAvatar);
+  /**
+   * Fetch the avatar at `avatarUrl` and expose it as an object URL, cached for `cacheDuration`.
+   *
+   * `avatarUrl` is the complete URL the identity provider supplied, stored as-is on the user
+   * record. It used to be only the last path segment of Google's `picture` claim, with this
+   * method rebuilding `https://lh3.googleusercontent.com/a/<fragment>` around it — which made
+   * the stored value unusable for any other provider. The backend allowlists the host before
+   * storing it, so what arrives here has already been validated.
+   */
+  getAvatar(avatarUrl: string): Observable<string | undefined> {
+    if (!avatarUrl) return of(undefined);
+
+    const cached = this.cache.get(avatarUrl);
     if (cached) {
       if (Date.now() <= cached.expiry) {
         return of(cached.url);
       } else {
         URL.revokeObjectURL(cached.url);
-        this.cache.delete(googleAvatar);
+        this.cache.delete(avatarUrl);
       }
     }
 
-    const url = `https://lh3.googleusercontent.com/a/${googleAvatar}`;
-    return this.fetchBlob(url).pipe(
+    return this.fetchBlob(avatarUrl).pipe(
       map(blob => {
         const blobUrl = URL.createObjectURL(blob);
-        this.cache.set(googleAvatar, {
+        this.cache.set(avatarUrl, {
           url: blobUrl,
           expiry: Date.now() + this.cacheDuration,
         });

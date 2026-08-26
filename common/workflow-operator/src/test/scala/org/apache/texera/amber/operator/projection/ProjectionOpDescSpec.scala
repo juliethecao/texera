@@ -20,7 +20,13 @@
 package org.apache.texera.amber.operator.projection
 
 import org.apache.texera.amber.core.tuple.{Attribute, AttributeType, Schema}
-import org.apache.texera.amber.core.workflow.PortIdentity
+import org.apache.texera.amber.core.workflow.{
+  HashPartition,
+  PortIdentity,
+  RangePartition,
+  SinglePartition,
+  UnknownPartition
+}
 import org.scalatest.BeforeAndAfter
 import org.scalatest.flatspec.AnyFlatSpec
 class ProjectionOpDescSpec extends AnyFlatSpec with BeforeAndAfter {
@@ -108,6 +114,106 @@ class ProjectionOpDescSpec extends AnyFlatSpec with BeforeAndAfter {
       projectionOpDesc.getExternalOutputSchemas(Map(PortIdentity() -> schema)).values.head
     assert(outputSchema.getAttributes.length == 2)
 
+  }
+
+  it should "derive the drop-mode schema with original names, types and order" in {
+    projectionOpDesc.isDrop = true
+    projectionOpDesc.attributes ++= List(
+      new AttributeUnit("field2", "")
+    )
+    val outputSchema =
+      projectionOpDesc.getExternalOutputSchemas(Map(PortIdentity() -> schema)).values.head
+    assert(outputSchema.getAttributes.length == 2)
+    assert(outputSchema.getIndex("field1") == 0)
+    assert(outputSchema.getIndex("field3") == 1)
+    assert(outputSchema.getAttribute("field1").getType == AttributeType.STRING)
+    assert(outputSchema.getAttribute("field3").getType == AttributeType.BOOLEAN)
+  }
+
+  it should "ignore aliases when deriving the drop-mode schema" in {
+    projectionOpDesc.isDrop = true
+    projectionOpDesc.attributes ++= List(
+      new AttributeUnit("field1", "renamed")
+    )
+    val outputSchema =
+      projectionOpDesc.getExternalOutputSchemas(Map(PortIdentity() -> schema)).values.head
+    assert(outputSchema.getAttributeNames == List("field2", "field3"))
+  }
+
+  it should "raise IllegalArgumentException when dropping a non-existent attribute" in {
+    // Unlike the exec, which silently ignores unknown names,
+    // Schema.remove rejects them at schema-derivation time.
+    projectionOpDesc.isDrop = true
+    projectionOpDesc.attributes ++= List(
+      new AttributeUnit("field---5", "f5")
+    )
+    assertThrows[IllegalArgumentException] {
+      projectionOpDesc.getExternalOutputSchemas(Map(PortIdentity() -> schema)).values.head
+    }
+  }
+
+  it should "derive an empty schema when dropping every attribute" in {
+    projectionOpDesc.isDrop = true
+    projectionOpDesc.attributes ++= List(
+      new AttributeUnit("field1", ""),
+      new AttributeUnit("field2", ""),
+      new AttributeUnit("field3", "")
+    )
+    val outputSchema =
+      projectionOpDesc.getExternalOutputSchemas(Map(PortIdentity() -> schema)).values.head
+    assert(outputSchema.getAttributes.isEmpty)
+  }
+
+  it should "match drop names case-insensitively when deriving the schema" in {
+    // Schema.remove lowercases both sides, matching the exec's behavior.
+    projectionOpDesc.isDrop = true
+    projectionOpDesc.attributes ++= List(
+      new AttributeUnit("FIELD2", "")
+    )
+    val outputSchema =
+      projectionOpDesc.getExternalOutputSchemas(Map(PortIdentity() -> schema)).values.head
+    assert(outputSchema.getAttributeNames == List("field1", "field3"))
+  }
+
+  it should "raise IllegalArgumentException on duplicate entries in the drop list" in {
+    // The exec tolerates duplicates; the schema derivation folds
+    // Schema.remove one entry at a time, so the second removal of the same name
+    // rejects a now non-existent attribute.
+    projectionOpDesc.isDrop = true
+    projectionOpDesc.attributes ++= List(
+      new AttributeUnit("field2", ""),
+      new AttributeUnit("field2", "")
+    )
+    assertThrows[IllegalArgumentException] {
+      projectionOpDesc.getExternalOutputSchemas(Map(PortIdentity() -> schema)).values.head
+    }
+  }
+
+  it should "preserve a HashPartition when its attributes are non-empty" in {
+    val out = projectionOpDesc.derivePartition()(List(HashPartition(List("field1"))))
+    assert(out == HashPartition(List("field1")))
+  }
+
+  it should "downgrade an empty HashPartition to UnknownPartition" in {
+    val out = projectionOpDesc.derivePartition()(List(HashPartition(List.empty)))
+    assert(out == UnknownPartition())
+  }
+
+  it should "preserve a RangePartition when its attributes are non-empty" in {
+    val out = projectionOpDesc.derivePartition()(List(RangePartition(List("field2"), 0L, 100L)))
+    assert(out == RangePartition(List("field2"), 0L, 100L))
+  }
+
+  it should "downgrade an empty RangePartition to UnknownPartition" in {
+    // RangePartition's companion apply already rewrites empty attributes to UnknownPartition,
+    // so an empty range never reaches the range arm; either way the result is UnknownPartition.
+    val out = projectionOpDesc.derivePartition()(List(RangePartition(List.empty, 0L, 100L)))
+    assert(out == UnknownPartition())
+  }
+
+  it should "pass through partitions that are neither hash nor range" in {
+    val out = projectionOpDesc.derivePartition()(List(SinglePartition()))
+    assert(out == SinglePartition())
   }
 
 }

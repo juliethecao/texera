@@ -19,6 +19,7 @@
 
 export const HOME = "/home";
 export const ABOUT = "/about";
+export const LOGIN = "/login";
 
 export const HUB = "/hub";
 export const HUB_WORKFLOW = `${HUB}/workflow`;
@@ -38,6 +39,7 @@ export const USER_COMPUTING_UNIT = `${USER}/compute`;
 export const USER_PYTHON_VENV = `${USER}/python-venv`;
 export const USER_QUOTA = `${USER}/quota`;
 export const USER_DISCUSSION = `${USER}/discussion`;
+export const USER_FEEDBACK = `${USER}/feedback`;
 
 export const ADMIN = "/admin";
 export const ADMIN_USER = `${ADMIN}/user`;

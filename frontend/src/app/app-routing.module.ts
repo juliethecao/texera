@@ -28,12 +28,14 @@ import { UserComputingUnitComponent } from "./dashboard/component/user/user-comp
 import { UserVenvComponent } from "./dashboard/component/user/user-venv/user-venv.component";
 import { WorkspaceComponent } from "./workspace/component/workspace.component";
 import { AboutComponent } from "./hub/component/about/about.component";
+import { TexeraLoginComponent } from "./hub/component/login/texera-login.component";
 import { AuthGuardService } from "./common/service/user/auth-guard.service";
 import { AdminUserComponent } from "./dashboard/component/admin/user/admin-user.component";
 import { AdminExecutionComponent } from "./dashboard/component/admin/execution/admin-execution.component";
 import { AdminGuardService } from "./dashboard/service/admin/guard/admin-guard.service";
 import { SearchComponent } from "./dashboard/component/user/search/search.component";
 import { FlarumComponent } from "./dashboard/component/user/flarum/flarum.component";
+import { FeedbackComponent } from "./dashboard/component/user/feedback/feedback.component";
 import { AdminGmailComponent } from "./dashboard/component/admin/gmail/admin-gmail.component";
 import { DatasetDetailComponent } from "./dashboard/component/user/user-dataset/user-dataset-explorer/dataset-detail.component";
 import { UserDatasetComponent } from "./dashboard/component/user/user-dataset/user-dataset.component";
@@ -44,6 +46,14 @@ import { HubSearchResultComponent } from "./hub/component/hub-search-result/hub-
 import { AdminSettingsComponent } from "./dashboard/component/admin/settings/admin-settings.component";
 
 const routes: Routes = [];
+
+// Full-page login: a top-level route (sibling of the DashboardComponent shell) so it renders
+// in the root outlet without the navbar/sidebar chrome. The component itself redirects an
+// already-signed-in visitor away in ngOnInit.
+routes.push({
+  path: "login",
+  component: TexeraLoginComponent,
+});
 
 routes.push({
   path: "",
@@ -140,6 +150,10 @@ routes.push({
         {
           path: "discussion",
           component: FlarumComponent,
+        },
+        {
+          path: "feedback",
+          component: FeedbackComponent,
         },
       ],
     },

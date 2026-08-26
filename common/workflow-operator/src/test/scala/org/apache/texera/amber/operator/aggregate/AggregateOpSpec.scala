@@ -61,6 +61,16 @@ class AggregateOpSpec extends AnyFunSuite {
     assert(attr.getType == AttributeType.INTEGER)
   }
 
+  test("getAggregationAttribute maps COUNT result to INTEGER even with a null input type") {
+    // COUNT(*) (empty attribute) has no input column, so schema propagation passes a
+    // null attrType; it must still resolve to INTEGER without dereferencing it.
+    val operation = makeAggregationOp(AggregationFunction.COUNT, "", "row_count")
+    val attr = operation.getAggregationAttribute(null)
+
+    assert(attr.getName == "row_count")
+    assert(attr.getType == AttributeType.INTEGER)
+  }
+
   test("getAggregationAttribute maps CONCAT result type to STRING") {
     val operation = makeAggregationOp(AggregationFunction.CONCAT, "tag", "all_tags")
     val attr = operation.getAggregationAttribute(AttributeType.INTEGER)
@@ -142,7 +152,27 @@ class AggregateOpSpec extends AnyFunSuite {
     assert(math.abs(result - 4.0) < 1e-6)
   }
 
-  test("COUNT aggregation with attribute == null counts all rows") {
+  test("COUNT with an empty attribute (COUNT(*)) counts all rows regardless of nulls") {
+    // An empty attribute means COUNT(*); the GUI sends "" when no column is selected.
+    val schema = makeSchema("points" -> AttributeType.INTEGER)
+    val tuple1 = makeTuple(schema, 10)
+    val tuple2 = makeTuple(schema, null)
+    val tuple3 = makeTuple(schema, 20)
+
+    val operation = makeAggregationOp(AggregationFunction.COUNT, "", "row_count")
+    val agg = operation.getAggFunc(AttributeType.INTEGER)
+
+    var partial = agg.init()
+    partial = agg.iterate(partial, tuple1)
+    partial = agg.iterate(partial, tuple2)
+    partial = agg.iterate(partial, tuple3)
+
+    val result = agg.finalAgg(partial).asInstanceOf[Number].intValue()
+    assert(result == 3)
+  }
+
+  test("COUNT with a null attribute also counts all rows") {
+    // A null attribute is treated the same as empty (COUNT(*)).
     val schema = makeSchema("points" -> AttributeType.INTEGER)
     val tuple1 = makeTuple(schema, 10)
     val tuple2 = makeTuple(schema, null)
@@ -534,5 +564,87 @@ class AggregateOpSpec extends AnyFunSuite {
 
     assert(totalRevenue == 350)
     assert(rowCount == 3)
+  }
+
+  test("AggregateOpExec computes COUNT(*) over every row (including nulls) end-to-end") {
+    // region (ignored), revenue (one null). An empty attribute means COUNT(*), so the
+    // executor must skip the input-column lookup and still count all 3 rows.
+    val schema = makeSchema(
+      "region" -> AttributeType.STRING,
+      "revenue" -> AttributeType.INTEGER
+    )
+
+    val tuple1 = makeTuple(schema, "west", 100)
+    val tuple2 = makeTuple(schema, "east", null)
+    val tuple3 = makeTuple(schema, "west", 50)
+
+    val desc = new AggregateOpDesc()
+    desc.aggregations = List(makeAggregationOp(AggregationFunction.COUNT, "", "row_count"))
+    desc.groupByKeys = List() // global aggregation
+
+    val exec = new AggregateOpExec(objectMapper.writeValueAsString(desc))
+    exec.open()
+    exec.processTuple(tuple1, 0)
+    exec.processTuple(tuple2, 0)
+    exec.processTuple(tuple3, 0)
+
+    val results = exec.onFinish(0).toList
+    assert(results.size == 1)
+    assert(results.head.getFields(0).asInstanceOf[Number].intValue() == 3)
+  }
+
+  // `close()` also resets `distributedAggregations`, which is deliberately not
+  // asserted: `onFinish` reads that list once per accumulated group and `close()`
+  // leaves none, while a reopened executor resets it again — so the reset is only
+  // observable by calling `processTuple` after `close()` without an intervening
+  // `open()`, which the executor lifecycle never does. Pinning it would cement an
+  // illegal call order.
+  test("AggregateOpExec close() discards the accumulated groups") {
+    val schema = makeSchema(
+      "city" -> AttributeType.STRING,
+      "sales" -> AttributeType.INTEGER
+    )
+
+    val desc = new AggregateOpDesc()
+    desc.aggregations = List(makeAggregationOp(AggregationFunction.SUM, "sales", "total_sales"))
+    desc.groupByKeys = List("city")
+
+    val exec = new AggregateOpExec(objectMapper.writeValueAsString(desc))
+    exec.open()
+    exec.processTuple(makeTuple(schema, "NY", 10), 0)
+    exec.processTuple(makeTuple(schema, "SF", 20), 0)
+
+    // Guard the fixture: the two groups really are accumulated, so the empty
+    // result asserted after close() cannot pass vacuously.
+    assert(exec.onFinish(0).toList.size == 2)
+
+    exec.close()
+    assert(exec.onFinish(0).toList.isEmpty)
+  }
+
+  test("AggregateOpExec open() after close() accumulates from an empty state") {
+    // The executor object outlives a single run, so a reopened executor must not
+    // fold the previous run's partial aggregates into the new result.
+    val schema = makeSchema(
+      "city" -> AttributeType.STRING,
+      "sales" -> AttributeType.INTEGER
+    )
+
+    val desc = new AggregateOpDesc()
+    desc.aggregations = List(makeAggregationOp(AggregationFunction.SUM, "sales", "total_sales"))
+    desc.groupByKeys = List("city")
+
+    val exec = new AggregateOpExec(objectMapper.writeValueAsString(desc))
+    exec.open()
+    exec.processTuple(makeTuple(schema, "NY", 10), 0)
+    exec.close()
+
+    exec.open()
+    exec.processTuple(makeTuple(schema, "NY", 3), 0)
+
+    val results = exec.onFinish(0).toList
+    assert(results.size == 1)
+    // 3, not 13: the first run's partial sum for "NY" must have been dropped.
+    assert(results.head.getFields(1).asInstanceOf[Number].intValue() == 3)
   }
 }

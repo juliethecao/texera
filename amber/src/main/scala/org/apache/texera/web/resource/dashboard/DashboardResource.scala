@@ -42,7 +42,7 @@ object DashboardResource {
       dataset: Option[DashboardDataset] = None
   )
 
-  case class UserInfo(userId: Integer, userName: String, googleAvatar: Option[String])
+  case class UserInfo(userId: Integer, userName: String, avatar: Option[String])
 
   case class DashboardSearchResult(
       results: List[DashboardClickableFileEntry],
@@ -145,7 +145,7 @@ object DashboardResource {
       searchQueryParams: SearchQueryParams
   ): List[OrderField[_]] = {
     // Regex pattern to extract column name and order direction
-    val pattern = "(Name|CreateTime|EditTime)(Asc|Desc)".r
+    val pattern = "(Name|CreateTime|EditTime|ExecutionTime)(Asc|Desc)".r
 
     searchQueryParams.orderBy match {
       case pattern(column, order) =>
@@ -154,7 +154,7 @@ object DashboardResource {
           case Some(value) =>
             List(order match {
               case "Asc"  => value.asc()
-              case "Desc" => value.desc()
+              case "Desc" => value.desc().nullsLast()
             })
           case None => List()
         }
@@ -165,10 +165,11 @@ object DashboardResource {
   // Helper method to map column names to actual database fields based on resource type
   private def getColumnField(columnName: String): Option[Field[_]] = {
     Option(columnName match {
-      case "Name"       => UnifiedResourceSchema.resourceNameField
-      case "CreateTime" => UnifiedResourceSchema.resourceCreationTimeField
-      case "EditTime"   => UnifiedResourceSchema.resourceLastModifiedTimeField
-      case _            => null // Default case for unmatched resource types or column names
+      case "Name"          => UnifiedResourceSchema.resourceNameField
+      case "CreateTime"    => UnifiedResourceSchema.resourceCreationTimeField
+      case "EditTime"      => UnifiedResourceSchema.resourceLastModifiedTimeField
+      case "ExecutionTime" => UnifiedResourceSchema.resourceExecutionTimeField
+      case _               => null // Default case for unmatched resource types or column names
     })
   }
 
@@ -220,7 +221,7 @@ class DashboardResource {
     val scalaUserIds: Set[Integer] = userIds.asScala.toSet
 
     val records = context
-      .select(USER.UID, USER.NAME, USER.GOOGLE_AVATAR)
+      .select(USER.UID, USER.NAME, USER.AVATAR)
       .from(USER)
       .where(USER.UID.in(scalaUserIds.asJava))
       .fetch()
@@ -229,8 +230,8 @@ class DashboardResource {
       .map { record =>
         val userId = record.get(USER.UID)
         val userName = record.get(USER.NAME)
-        val googleAvatar = Option(record.get(USER.GOOGLE_AVATAR))
-        userId -> UserInfo(userId, userName, googleAvatar)
+        val avatar = Option(record.get(USER.AVATAR))
+        userId -> UserInfo(userId, userName, avatar)
       }
       .toMap
       .asJava
