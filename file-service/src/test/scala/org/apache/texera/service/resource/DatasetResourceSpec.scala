@@ -43,6 +43,8 @@ import org.apache.texera.dao.jooq.generated.tables.pojos.{
   User
 }
 import org.apache.texera.service.MockLakeFS
+import org.apache.texera.service.`type`.{ExistingUploadFile, ExistingUploadFilesRequest}
+import org.apache.texera.service.util.CoverImageUtils
 import org.apache.texera.service.util.S3StorageClient
 import org.jooq.SQLDialect
 import org.jooq.impl.DSL
@@ -791,12 +793,12 @@ class DatasetResourceSpec
 
     val resp = datasetResource.findExistingUploadFiles(
       dataset.getDid,
-      DatasetResource.ExistingUploadFilesRequest(
+      ExistingUploadFilesRequest(
         List(
-          DatasetResource.ExistingUploadFile("committed.csv", committed.length),
-          DatasetResource.ExistingUploadFile("staged.csv", staged.length),
-          DatasetResource.ExistingUploadFile("wrong-size.csv", staged.length + 1),
-          DatasetResource.ExistingUploadFile("missing.csv", 1L)
+          ExistingUploadFile("committed.csv", committed.length),
+          ExistingUploadFile("staged.csv", staged.length),
+          ExistingUploadFile("wrong-size.csv", staged.length + 1),
+          ExistingUploadFile("missing.csv", 1L)
         )
       ),
       sessionUser
@@ -838,8 +840,8 @@ class DatasetResourceSpec
     val requestPath = "folder/../committed.csv"
     val resp = datasetResource.findExistingUploadFiles(
       dataset.getDid,
-      DatasetResource.ExistingUploadFilesRequest(
-        List(DatasetResource.ExistingUploadFile(requestPath, committed.length))
+      ExistingUploadFilesRequest(
+        List(ExistingUploadFile(requestPath, committed.length))
       ),
       sessionUser
     )
@@ -862,7 +864,7 @@ class DatasetResourceSpec
 
     val resp = datasetResource.findExistingUploadFiles(
       dataset.getDid,
-      DatasetResource.ExistingUploadFilesRequest(null),
+      ExistingUploadFilesRequest(null),
       sessionUser
     )
 
@@ -874,8 +876,8 @@ class DatasetResourceSpec
     val ex = intercept[BadRequestException] {
       datasetResource.findExistingUploadFiles(
         baseDataset.getDid,
-        DatasetResource.ExistingUploadFilesRequest(
-          List(DatasetResource.ExistingUploadFile("bad-size.csv", -1L))
+        ExistingUploadFilesRequest(
+          List(ExistingUploadFile("bad-size.csv", -1L))
         ),
         sessionUser
       )
@@ -888,8 +890,8 @@ class DatasetResourceSpec
     val ex = intercept[ForbiddenException] {
       datasetResource.findExistingUploadFiles(
         multipartDataset.getDid,
-        DatasetResource.ExistingUploadFilesRequest(
-          List(DatasetResource.ExistingUploadFile("private.csv", 1L))
+        ExistingUploadFilesRequest(
+          List(ExistingUploadFile("private.csv", 1L))
         ),
         multipartNoWriteSessionUser
       )
@@ -919,8 +921,8 @@ class DatasetResourceSpec
     val ex = intercept[NotFoundException] {
       datasetResource.findExistingUploadFiles(
         dataset.getDid,
-        DatasetResource.ExistingUploadFilesRequest(
-          List(DatasetResource.ExistingUploadFile("missing.csv", 1L))
+        ExistingUploadFilesRequest(
+          List(ExistingUploadFile("missing.csv", 1L))
         ),
         sessionUser
       )
@@ -1652,7 +1654,7 @@ class DatasetResourceSpec
     s"$prefix/${System.nanoTime()}-${Random.alphanumeric.take(8).mkString}.bin"
 
   // ---------- site_settings helpers (max upload size) ----------
-  private val MaxUploadKey = "single_file_upload_max_size_mib"
+  private val MaxUploadKey = "dataset_single_file_upload_max_size_mib"
 
   private def upsertSiteSetting(key: String, value: String): Unit = {
     val table = DSL.table(DSL.name("texera_db", "site_settings"))
@@ -3404,7 +3406,7 @@ class DatasetResourceSpec
     )
 
     maliciousPaths.foreach { path =>
-      val request = DatasetResource.CoverImageRequest(path)
+      val request = CoverImageUtils.CoverImageRequest(path)
 
       assertThrows[BadRequestException] {
         datasetResource.updateDatasetCoverImage(
@@ -3423,7 +3425,7 @@ class DatasetResourceSpec
     )
 
     absolutePaths.foreach { path =>
-      val request = DatasetResource.CoverImageRequest(path)
+      val request = CoverImageUtils.CoverImageRequest(path)
 
       assertThrows[BadRequestException] {
         datasetResource.updateDatasetCoverImage(
@@ -3443,7 +3445,7 @@ class DatasetResourceSpec
     )
 
     invalidPaths.foreach { path =>
-      val request = DatasetResource.CoverImageRequest(path)
+      val request = CoverImageUtils.CoverImageRequest(path)
 
       assertThrows[BadRequestException] {
         datasetResource.updateDatasetCoverImage(
@@ -3459,7 +3461,7 @@ class DatasetResourceSpec
     assertThrows[BadRequestException] {
       datasetResource.updateDatasetCoverImage(
         baseDataset.getDid,
-        DatasetResource.CoverImageRequest(""),
+        CoverImageUtils.CoverImageRequest(""),
         sessionUser
       )
     }
@@ -3467,14 +3469,14 @@ class DatasetResourceSpec
     assertThrows[BadRequestException] {
       datasetResource.updateDatasetCoverImage(
         baseDataset.getDid,
-        DatasetResource.CoverImageRequest(null),
+        CoverImageUtils.CoverImageRequest(null),
         sessionUser
       )
     }
   }
 
   it should "reject when user lacks WRITE access" in {
-    val request = DatasetResource.CoverImageRequest("v1/cover.jpg")
+    val request = CoverImageUtils.CoverImageRequest("v1/cover.jpg")
 
     assertThrows[ForbiddenException] {
       datasetResource.updateDatasetCoverImage(
@@ -3488,7 +3490,7 @@ class DatasetResourceSpec
   it should "set cover image successfully" in {
     testDatasetVersion
 
-    val request = DatasetResource.CoverImageRequest(testCoverImagePath)
+    val request = CoverImageUtils.CoverImageRequest(testCoverImagePath)
     val response = datasetResource.updateDatasetCoverImage(
       baseDataset.getDid,
       request,
@@ -3878,5 +3880,116 @@ class DatasetResourceSpec
       .find(_.getName == "test-cover.jpg")
       .get
       .getFilePath should startWith("/dataset/")
+  }
+
+  // ---------------------------------------------------------------------------
+  // createDatasetVersion
+  // ---------------------------------------------------------------------------
+
+  // The state right after a user drops a file on "Create New Version": a dataset whose
+  // repository holds one staged (uncommitted) file and no version row yet.
+  private def seedDatasetWithStagedFile(prefix: String): Dataset = {
+    val dataset = seedDataset(s"$prefix-${System.nanoTime()}", ownerUser.getUid)
+    LakeFSStorageClient.initRepo(dataset.getRepositoryName)
+    stageFile(dataset, "staged.txt")
+    dataset
+  }
+
+  private def stageFile(dataset: Dataset, path: String): Unit =
+    LakeFSStorageClient.writeFileToRepo(
+      dataset.getRepositoryName,
+      path,
+      new ByteArrayInputStream("content".getBytes(StandardCharsets.UTF_8))
+    )
+
+  private def createVersion(
+      dataset: Dataset,
+      description: String
+  ): DatasetResource.DashboardDatasetVersion =
+    datasetResource.createDatasetVersion(description, dataset.getDid, sessionUser)
+
+  // "v1 - " takes 5 of the 128 characters dataset_version.name allows.
+  private val maxDescriptionLength = 128 - "v1 - ".length
+
+  "createDatasetVersion" should "name versions by their number, followed by the description when given" in {
+    val dataset = seedDatasetWithStagedFile("version-naming")
+
+    createVersion(dataset, null).datasetVersion.getName shouldBe "v1"
+
+    stageFile(dataset, "second.txt")
+    createVersion(dataset, "second upload").datasetVersion.getName shouldBe "v2 - second upload"
+
+    stageFile(dataset, "third.txt")
+    createVersion(dataset, "").datasetVersion.getName shouldBe "v3"
+  }
+
+  it should "accept a description that makes the version name exactly 128 characters" in {
+    val dataset = seedDatasetWithStagedFile("version-name-at-limit")
+
+    val created = createVersion(dataset, "d" * maxDescriptionLength)
+
+    created.datasetVersion.getName should have length 128
+  }
+
+  it should "reject a description that pushes the version name past 128 characters without committing" in {
+    val dataset = seedDatasetWithStagedFile("version-name-too-long")
+
+    val ex = intercept[WebApplicationException] {
+      createVersion(dataset, "d" * (maxDescriptionLength + 1))
+    }
+    assertStatus(ex, 400)
+    ex.getMessage should include("too long")
+
+    // Nothing was committed: the file is still staged, so the dataset page keeps showing it
+    // as a pending change.
+    LakeFSStorageClient
+      .retrieveUncommittedObjects(dataset.getRepositoryName)
+      .map(_.getPath) shouldBe List("staged.txt")
+
+    // The user can fix the description and retry; no version row was created, so it is still v1.
+    createVersion(dataset, "shorter").datasetVersion.getName shouldBe "v1 - shorter"
+  }
+
+  it should "count characters rather than UTF-16 code units against the 128 limit" in {
+    val dataset = seedDatasetWithStagedFile("version-name-unicode")
+    // U+1F600 is one character but two UTF-16 code units.
+    val emoji = new String(Character.toChars(0x1f600))
+
+    val ex = intercept[WebApplicationException] {
+      createVersion(dataset, emoji * (maxDescriptionLength + 1))
+    }
+    assertStatus(ex, 400)
+    ex.getMessage should include("129 characters")
+
+    val name = createVersion(dataset, emoji * maxDescriptionLength).datasetVersion.getName
+    name.codePointCount(0, name.length) shouldBe 128
+  }
+
+  it should "reject a version when there are no staged changes" in {
+    val dataset = seedDatasetWithStagedFile("version-no-changes")
+    createVersion(dataset, "first")
+
+    val ex = intercept[WebApplicationException] {
+      createVersion(dataset, "empty")
+    }
+    assertStatus(ex, 400)
+    datasetResource.getDatasetVersionList(dataset.getDid, sessionUser) should have size 1
+  }
+
+  it should "reject a description containing a slash without committing" in {
+    val dataset = seedDatasetWithStagedFile("version-slash")
+
+    val ex = intercept[WebApplicationException] {
+      createVersion(dataset, "2024/01 snapshot")
+    }
+    assertStatus(ex, 400)
+
+    // Nothing was committed: the file is still staged and no version row exists, so the retry
+    // with a usable description succeeds as the first version.
+    LakeFSStorageClient
+      .retrieveUncommittedObjects(dataset.getRepositoryName)
+      .map(_.getPath) shouldBe List("staged.txt")
+    val retried = createVersion(dataset, "2024-01 snapshot")
+    retried.datasetVersion.getName shouldBe "v1 - 2024-01 snapshot"
   }
 }
