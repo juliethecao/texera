@@ -153,6 +153,12 @@ object HuggingFaceCodegenBase {
        |        self.CONTEXT_COLUMN = $contextColumn
        |        self.CANDIDATE_LABELS = $candidateLabels
        |        self.SENTENCES_COLUMN = $sentencesColumn
+       |        # Name of the provider that last returned a successful response.
+       |        # _post_with_fallback tries it first on every subsequent row so a
+       |        # dead cheapest-first provider isn't re-probed (and re-timed-out)
+       |        # on every single row of the table; the full cost-ordered walk is
+       |        # only resumed once the cached provider itself starts failing.
+       |        self._working_provider = None
        |
        |    def _resolve_providers(self, token):
        |        '''Query the HF Hub API for inference providers serving this model.
@@ -200,6 +206,14 @@ object HuggingFaceCodegenBase {
        |        RETRYABLE = (400, 401, 404, 422, 429, 502, 503)
        |        last_resp = None
        |        errors = []
+       |        # Try the last-successful provider first. It stays in its normal
+       |        # cost-order position for every provider after it, so a failure
+       |        # here still falls through to the full walk below.
+       |        if self._working_provider is not None:
+       |            cached = [p for p in providers if p["name"] == self._working_provider]
+       |            if cached:
+       |                rest = [p for p in providers if p["name"] != self._working_provider]
+       |                providers = cached + rest
        |        for prov in providers:
        |            provider_name = prov["name"]
        |            provider_id = prov["providerId"]
@@ -248,6 +262,7 @@ object HuggingFaceCodegenBase {
        |                errors.append(f"{provider_name}: {type(e).__name__}")
        |                continue
        |            if resp.status_code in (200, 201):
+       |                self._working_provider = provider_name
        |                return resp, None
        |            try:
        |                detail = resp.json().get("error", resp.text[:200])

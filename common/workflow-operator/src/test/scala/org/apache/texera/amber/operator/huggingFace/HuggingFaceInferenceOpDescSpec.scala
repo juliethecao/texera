@@ -19,6 +19,7 @@
 
 package org.apache.texera.amber.operator.huggingFace
 
+import com.typesafe.config.ConfigFactory
 import org.apache.texera.amber.core.tuple.{AttributeType, Schema}
 import org.apache.texera.amber.core.workflow.PortIdentity
 import org.apache.texera.amber.operator.huggingFace.codegen.{
@@ -33,6 +34,11 @@ import org.apache.texera.amber.pybuilder.PyStringTypes.EncodableString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.apache.texera.amber.operator.metadata.OperatorMetadataGenerator
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
+import scala.util.Try
 
 class HuggingFaceInferenceOpDescSpec extends AnyFlatSpec with Matchers {
 
@@ -717,5 +723,169 @@ class HuggingFaceInferenceOpDescSpec extends AnyFlatSpec with Matchers {
       desc.getOutputSchemas(Map(PortIdentity(0) -> inputSchema))
     }
     ex.getMessage should include("Result column 'prompt'")
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Runtime behavioral test for the provider cache in _post_with_fallback.
+  // Follows FilledAreaPlotOpDescSpec's pattern: stub the pytexera import
+  // seam, exec the generated module unmodified, and drive its real methods.
+  // ──────────────────────────────────────────────────────────────────
+
+  // Python executable resolution, following PythonCodeRawInvalidTextSpec.
+  private def resolvePythonExecutable(): Option[String] = {
+    def fromConfig: Option[String] = {
+      val configOpt =
+        Try(ConfigFactory.parseResources("udf.conf").resolve()).toOption
+          .orElse(Try(ConfigFactory.load()).toOption)
+      configOpt
+        .flatMap(c => Try(c.getConfig("python").getString("path")).toOption)
+        .map(_.trim)
+        .filter(_.nonEmpty)
+    }
+
+    def isRunnable(exe: String): Boolean = {
+      val pTry = Try(new ProcessBuilder(exe, "--version").redirectErrorStream(true).start())
+      pTry.toOption.exists { p =>
+        val finished = p.waitFor(5, TimeUnit.SECONDS)
+        if (!finished) { p.destroyForcibly(); false }
+        else p.exitValue() == 0
+      }
+    }
+
+    (fromConfig.toList ++ List("python3", "python", "py")).distinct.find(isRunnable)
+  }
+
+  private def canImportPandasAndRequests(python: String): Boolean = {
+    val pTry = Try(
+      new ProcessBuilder(python, "-c", "import pandas, requests").redirectErrorStream(true).start()
+    )
+    pTry.toOption.exists { p =>
+      val finished = p.waitFor(60, TimeUnit.SECONDS)
+      if (!finished) { p.destroyForcibly(); false }
+      else p.exitValue() == 0
+    }
+  }
+
+  // Driver: stubs pytexera, execs the generated module, then monkeypatches
+  // requests.post with a fake that logs which provider URL each call hit.
+  // Calls _post_with_fallback twice with the same cost-ordered provider list
+  // (dead "hf-inference" first, working "cerebras" second) to simulate two
+  // rows of a table, and prints each row's call log so the assertions below
+  // can check that row 2 never re-probes the dead provider.
+  private val providerCacheDriverScript: String =
+    """import base64
+      |import sys
+      |import types
+      |from typing import Iterator, Optional
+      |
+      |class UDFTableOperator:
+      |    def decode_python_template(self, data):
+      |        return base64.b64decode(data).decode("utf-8")
+      |
+      |stub = types.ModuleType("pytexera")
+      |stub.UDFTableOperator = UDFTableOperator
+      |stub.overrides = lambda fn: fn
+      |stub.Table = object
+      |stub.TableLike = object
+      |stub.Iterator = Iterator
+      |stub.Optional = Optional
+      |sys.modules["pytexera"] = stub
+      |
+      |ns = {"__name__": "generated_hf_inference"}
+      |with open(sys.argv[1]) as f:
+      |    exec(compile(f.read(), sys.argv[1], "exec"), ns)
+      |op = ns["ProcessTableOperator"]()
+      |op.MODEL_ID = "org/model"
+      |op.TASK = "text-generation"
+      |op._working_provider = None
+      |
+      |class FakeResp:
+      |    def __init__(self, status_code, body):
+      |        self.status_code = status_code
+      |        self._body = body
+      |        self.text = str(body)
+      |        self.headers = {}
+      |    def json(self):
+      |        return self._body
+      |
+      |call_log = []
+      |
+      |def fake_post(url, headers=None, json=None, data=None, timeout=None):
+      |    if "hf-inference" in url:
+      |        call_log.append("hf-inference")
+      |        return FakeResp(503, {"error": "dead"})
+      |    if "cerebras" in url:
+      |        call_log.append("cerebras")
+      |        return FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})
+      |    call_log.append("unknown:" + url)
+      |    return FakeResp(500, {})
+      |
+      |import requests
+      |requests.post = fake_post
+      |
+      |providers = [
+      |    {"name": "hf-inference", "providerId": "org/model"},
+      |    {"name": "cerebras", "providerId": "org/model"},
+      |]
+      |json_headers = {"Authorization": "Bearer x", "Content-Type": "application/json"}
+      |payload = {"model": "org/model", "messages": [{"role": "user", "content": "hi"}]}
+      |
+      |resp1, _ = op._post_with_fallback(providers, json_headers, {}, payload, False, "hi")
+      |row1_calls = list(call_log)
+      |call_log.clear()
+      |
+      |resp2, _ = op._post_with_fallback(providers, json_headers, {}, payload, False, "hi")
+      |row2_calls = list(call_log)
+      |
+      |print("ROW1_CALLS " + ",".join(row1_calls))
+      |print("ROW2_CALLS " + ",".join(row2_calls))
+      |print("ROW1_STATUS " + str(resp1.status_code))
+      |print("ROW2_STATUS " + str(resp2.status_code))
+      |print("WORKING_PROVIDER " + str(op._working_provider))
+      |""".stripMargin
+
+  it should "cache the last-successful provider and skip a known-dead provider on the next row" in {
+    val python = resolvePythonExecutable().getOrElse(
+      cancel("No runnable python executable (udf.conf python.path, python3, python, py)")
+    )
+    if (!canImportPandasAndRequests(python)) {
+      cancel(s"'$python' cannot import pandas and requests; skipping runtime verification")
+    }
+
+    val moduleFile = Files.createTempFile("hf_inference_op_", ".py")
+    val driverFile = Files.createTempFile("hf_inference_driver_", ".py")
+    try {
+      Files.write(moduleFile, makeDesc().generatePythonCode().getBytes(StandardCharsets.UTF_8))
+      Files.write(driverFile, providerCacheDriverScript.getBytes(StandardCharsets.UTF_8))
+
+      val process = new ProcessBuilder(python, driverFile.toString, moduleFile.toString)
+        .redirectErrorStream(true)
+        .start()
+      val finished = process.waitFor(60, TimeUnit.SECONDS)
+      if (!finished) {
+        process.destroyForcibly()
+        fail("Runtime verification driver timed out after 60s")
+      }
+      val output = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+      if (process.exitValue() != 0) {
+        fail(s"Driver script failed (exit=${process.exitValue()}):\n$output")
+      }
+
+      // Row 1: no cached provider yet, walks the full list — dead hf-inference
+      // first, then the working cerebras.
+      output should include("ROW1_CALLS hf-inference,cerebras")
+      output should include("ROW1_STATUS 200")
+      // Row 2: cerebras is now cached, so it's tried first and succeeds
+      // immediately — hf-inference (known dead) is never re-probed.
+      output should include("ROW2_CALLS cerebras")
+      output should not include "ROW2_CALLS cerebras,hf-inference"
+      output should not include "ROW2_CALLS hf-inference"
+      output should include("ROW2_STATUS 200")
+      output should include("WORKING_PROVIDER cerebras")
+    } finally {
+      Try(Files.deleteIfExists(moduleFile))
+      Try(Files.deleteIfExists(driverFile))
+      ()
+    }
   }
 }
